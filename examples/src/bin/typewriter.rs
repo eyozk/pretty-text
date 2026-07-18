@@ -62,10 +62,10 @@ fn typewriter(mut commands: Commands, server: Res<AssetServer>) {
             Spread::default(),
             //
             // Style my text with normal Bevy components.
-            TextLayout::new_with_justify(Justify::Center),
+            TextLayout::justify(Justify::Center),
             TextFont {
-                font_size: 52.0,
-                font: server.load("Pixelify_Sans/PixelifySans-Regular.ttf"),
+                font_size: 52.0.into(),
+                font: server.load("Pixelify_Sans/PixelifySans-Regular.ttf").into(),
                 ..Default::default()
             },
             //

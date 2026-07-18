@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use bevy::ecs::entity::EntityHashMap;
 use bevy::prelude::*;
-use bevy::text::{ComputedTextBlock, PositionedGlyph, TextLayoutInfo};
+use bevy::text::{PositionedGlyph, TextLayoutInfo};
 use pretty_text_macros::{DynamicEffect, parser_syntax};
 use rand::Rng;
 
@@ -152,7 +152,7 @@ fn scramble(
         ),
         With<ComputeScramble>,
     >,
-    layouts: Query<(&TextLayoutInfo, &ComputedTextBlock)>,
+    layouts: Query<&TextLayoutInfo>,
     fonts: Query<&TextFont>,
     mut layout_hash: Local<EntityHashMap<Entity>>,
 ) -> Result {
@@ -262,39 +262,19 @@ fn scramble(
             let Some(scramble_layout) = scramble_layout else {
                 continue;
             };
-            let (layout, computed) = layouts.get(scramble_layout.0)?;
+            let layout = layouts.get(scramble_layout.0)?;
 
             // Reveal glyph now that layout is ready.
             if *visibility != Visibility::Inherited {
                 *visibility = Visibility::Inherited;
             }
 
-            // this should basically never happen, and if it does then there is a bug in
-            // the scamble code in which case stalling here would be annoying
-            let max_depth = 10;
-            let mut depth = 0;
-            let mut new_glyph;
-            loop {
-                if layout.glyphs.is_empty() {
-                    continue 'outer;
-                }
-
-                new_glyph = &layout.glyphs[rng.random_range(0..layout.glyphs.len())];
-                let str = computed.buffer().lines[new_glyph.line_index].text();
-                if &str[new_glyph.byte_index..new_glyph.byte_index + new_glyph.byte_length] != " " {
-                    break;
-                }
-
-                if depth >= max_depth {
-                    break;
-                }
-
-                depth += 1;
+            if layout.glyphs.is_empty() {
+                continue 'outer;
             }
 
+            let new_glyph = &layout.glyphs[rng.random_range(0..layout.glyphs.len())];
             glyph.0.atlas_info = new_glyph.atlas_info.clone();
-            glyph.0.span_index = new_glyph.span_index;
-            glyph.0.size = new_glyph.size;
         }
     }
     Ok(())

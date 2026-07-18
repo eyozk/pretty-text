@@ -65,7 +65,7 @@ fn spawn_text(mut commands: Commands) {
             let text = scene.1;
             let calculated_size = 58.0 / 2.4 * scene.0 * scale;
             let font = TextFont {
-                font_size: calculated_size,
+                font_size: calculated_size.into(),
                 ..Default::default()
             };
 

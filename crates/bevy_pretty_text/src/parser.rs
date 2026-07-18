@@ -195,7 +195,7 @@ use std::ops::Range;
 
 use bevy::ecs::spawn::SpawnableList;
 use bevy::prelude::*;
-use bevy::text::TextRoot;
+use bevy::text::TextSection;
 use pretty_text_parser::{CommandKind, Item, PrettyParserError};
 
 use crate::PrettyText;
@@ -347,7 +347,7 @@ impl PrettyParser2d {
 }
 
 /// Marks a viable text root. Implemented for [`Text`] and [`Text2d`].
-pub trait Root: std::fmt::Debug + Default + Clone + Reflect + TextRoot + sealed::Sealed {}
+pub trait Root: std::fmt::Debug + Default + Clone + Reflect + TextSection + sealed::Sealed {}
 impl Root for Text {}
 impl Root for Text2d {}
 

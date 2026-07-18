@@ -80,7 +80,7 @@ fn spawn_text(mut commands: Commands) {
         .spawn((
             pretty!("[Don't pick me!](manual)"),
             TextFont {
-                font_size: 42.0,
+                font_size: 42.0.into(),
                 ..Default::default()
             },
             ChildOf(manual_container),
@@ -93,7 +93,7 @@ fn spawn_text(mut commands: Commands) {
         .spawn((
             pretty!("[Pick me!](scary)"),
             TextFont {
-                font_size: 42.0,
+                font_size: 42.0.into(),
                 ..Default::default()
             },
             ChildOf(style_writer_container),

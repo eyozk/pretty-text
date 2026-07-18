@@ -6,6 +6,7 @@ use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::ecs::query::ROQueryItem;
 use bevy::ecs::system::lifetimeless::{Read, SRes};
 use bevy::math::{FloatOrd, Mat4, Vec2};
+use bevy::render::camera::ExtractedCamera;
 use bevy::render::globals::GlobalsUniform;
 use bevy::render::render_asset::{PrepareAssetError, RenderAsset, RenderAssetPlugin};
 use bevy::render::render_resource::binding_types::uniform_buffer;
@@ -187,6 +188,8 @@ where
                 shader_defs.push("TONEMAP_METHOD_BLENDER_FILMIC".into());
             } else if method == SpritePipelineKey::TONEMAP_METHOD_TONY_MC_MAPFACE {
                 shader_defs.push("TONEMAP_METHOD_TONY_MC_MAPFACE".into());
+            } else if method == SpritePipelineKey::TONEMAP_METHOD_PBR_NEUTRAL {
+                shader_defs.push("TONEMAP_METHOD_PBR_NEUTRAL".into());
             }
 
             // Debanding is tied to tonemapping in the shader, cannot run without it.
@@ -195,10 +198,14 @@ where
             }
         }
 
-        let format = match key.contains(SpritePipelineKey::HDR) {
-            true => ViewTarget::TEXTURE_FORMAT_HDR,
-            false => TextureFormat::bevy_default(),
-        };
+        if key.contains(SpritePipelineKey::SRGB_COMPOSITING) {
+            shader_defs.push("SRGB_OUTPUT".into());
+        }
+        if key.contains(SpritePipelineKey::OKLAB_COMPOSITING) {
+            shader_defs.push("OKLAB_OUTPUT".into());
+        }
+
+        let format = key.target_format();
 
         let buffers = super::vertex_buffer_layouts().to_vec();
 
@@ -226,8 +233,8 @@ where
             ],
             depth_stencil: Some(DepthStencilState {
                 format: CORE_2D_DEPTH_FORMAT,
-                depth_write_enabled: false,
-                depth_compare: CompareFunction::GreaterEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(CompareFunction::GreaterEqual),
                 stencil: StencilState {
                     front: StencilFaceState::IGNORE,
                     back: StencilFaceState::IGNORE,
@@ -391,7 +398,6 @@ pub fn extract_glyphs(
     mut commands: Commands,
     mut extracted_spans: ResMut<ExtractedGlyphSpans>,
     mut extracted_glyphs: ResMut<ExtractedGlyphs>,
-    texture_atlases: Extract<Res<Assets<TextureAtlasLayout>>>,
     text_query: Extract<
         Query<
             (
@@ -458,7 +464,7 @@ pub fn extract_glyphs(
             Glyph(PositionedGlyph {
                 position,
                 atlas_info,
-                span_index,
+                section_index,
                 ..
             }),
             span_entity,
@@ -469,11 +475,7 @@ pub fn extract_glyphs(
         )) = iter.next()
         {
             if inherited_visibility.get() {
-                let rect = texture_atlases
-                    .get(atlas_info.texture_atlas)
-                    .unwrap()
-                    .textures[atlas_info.location.glyph_index]
-                    .as_rect();
+                let rect = atlas_info.rect;
                 extracted_glyphs.push(ExtractedGlyph {
                     vertices: glyph_vertices.0.map(|v| {
                         model_matrix
@@ -491,7 +493,7 @@ pub fn extract_glyphs(
 
             if !extracted.is_empty()
                 && iter.peek().is_none_or(|(glyph, _, _, _, _, _)| {
-                    glyph.0.span_index != *span_index
+                    glyph.0.section_index != *section_index
                         || glyph.0.atlas_info.texture != atlas_info.texture
                 })
             {
@@ -644,6 +646,7 @@ fn queue_glyphs<M: GlyphMaterial>(
     mut transparent_render_phases: ResMut<ViewSortedRenderPhases<Transparent2d>>,
     glyph_meta: Res<GlyphMaterialMeta<M>>,
     mut views: Query<(
+        &ExtractedCamera,
         &ExtractedView,
         &Msaa,
         Option<&Tonemapping>,
@@ -654,16 +657,29 @@ fn queue_glyphs<M: GlyphMaterial>(
 {
     let draw_function = draw_functions.read().id::<DrawGlyphMaterial2d<M>>();
 
-    for (view, msaa, tonemapping, dither) in &mut views {
+    for (camera, view, msaa, tonemapping, dither) in &mut views {
         let Some(transparent_phase) = transparent_render_phases.get_mut(&view.retained_view_entity)
         else {
             continue;
         };
 
         let msaa_key = SpritePipelineKey::from_msaa_samples(msaa.samples());
-        let mut view_key = SpritePipelineKey::from_hdr(view.hdr) | msaa_key;
+        let mut view_key = SpritePipelineKey::from_target_format(view.target_format) | msaa_key;
 
-        if !view.hdr {
+        if camera
+            .compositing_space
+            .is_some_and(|space| space == bevy::camera::CompositingSpace::Srgb)
+        {
+            view_key |= SpritePipelineKey::SRGB_COMPOSITING;
+        }
+        if camera
+            .compositing_space
+            .is_some_and(|space| space == bevy::camera::CompositingSpace::Oklab)
+        {
+            view_key |= SpritePipelineKey::OKLAB_COMPOSITING;
+        }
+
+        if !camera.hdr {
             if let Some(tonemapping) = tonemapping {
                 view_key |= SpritePipelineKey::TONEMAP_IN_SHADER;
                 view_key |= match tonemapping {
@@ -679,6 +695,7 @@ fn queue_glyphs<M: GlyphMaterial>(
                     }
                     Tonemapping::TonyMcMapface => SpritePipelineKey::TONEMAP_METHOD_TONY_MC_MAPFACE,
                     Tonemapping::BlenderFilmic => SpritePipelineKey::TONEMAP_METHOD_BLENDER_FILMIC,
+                    Tonemapping::KhronosPbrNeutral => SpritePipelineKey::TONEMAP_METHOD_PBR_NEUTRAL,
                 };
             }
             if let Some(DebandDither::Enabled) = dither {
@@ -702,7 +719,7 @@ fn queue_glyphs<M: GlyphMaterial>(
             let extracted_span = &extracted_spans.0[*index];
             match extracted_span.kind {
                 ExtractedGlyphSpanKind::Sprite => {
-                    transparent_phase.add(Transparent2d {
+                    transparent_phase.add_transient(Transparent2d {
                         draw_function,
                         pipeline,
                         entity: (extracted_span.render_entity, extracted_span.main_entity),

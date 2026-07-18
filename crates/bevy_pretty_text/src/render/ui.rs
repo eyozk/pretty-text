@@ -20,6 +20,8 @@ use bevy::render::{
 use bevy::render::{RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::ShaderRef;
 use bevy::text::{ComputedTextBlock, PositionedGlyph};
+use bevy::ui::ComputedStackIndex;
+use bevy::ui::widget::TextScroll;
 use bevy::ui_render::{TransparentUi, UiCameraMap, UiCameraView, UiPipelineKey};
 use bevy::{ecs::system::*, render::texture::GpuImage};
 
@@ -173,11 +175,7 @@ where
                 shader_defs,
                 entry_point: Some("fragment".into()),
                 targets: vec![Some(ColorTargetState {
-                    format: if key.hdr {
-                        ViewTarget::TEXTURE_FORMAT_HDR
-                    } else {
-                        TextureFormat::bevy_default()
-                    },
+                    format: key.target_format,
                     blend: Some(BlendState::ALPHA_BLENDING),
                     write_mask: ColorWrites::ALL,
                 })],
@@ -333,14 +331,15 @@ pub fn extract_glyphs(
     mut commands: Commands,
     mut extracted_spans: ResMut<ExtractedGlyphSpans>,
     mut extracted_glyphs: ResMut<ExtractedGlyphs>,
-    texture_atlases: Extract<Res<Assets<TextureAtlasLayout>>>,
     uitext_query: Extract<
         Query<
             (
                 Entity,
                 &ComputedNode,
+                &ComputedStackIndex,
                 &UiGlobalTransform,
                 Option<&CalculatedClip>,
+                Option<&TextScroll>,
                 &ComputedUiTargetCamera,
                 &Glyphs,
                 &RetainedInheritedVisibility,
@@ -365,8 +364,17 @@ pub fn extract_glyphs(
     let mut extracted = Vec::new();
 
     let mut camera_mapper = camera_map.get_mapper();
-    for (entity, uinode, global_transform, clip, camera, glyph_entities, inherited_visibility) in
-        &uitext_query
+    for (
+        entity,
+        uinode,
+        stack_index,
+        global_transform,
+        maybe_clip,
+        text_scroll,
+        camera,
+        glyph_entities,
+        inherited_visibility,
+    ) in &uitext_query
     {
         if !inherited_visibility.0.get() || uinode.is_empty() {
             continue;
@@ -376,8 +384,21 @@ pub fn extract_glyphs(
             continue;
         };
 
-        let transform_2d =
-            Affine2::from(*global_transform) * Affine2::from_translation(-0.5 * uinode.size());
+        let transform_2d = Affine2::from(*global_transform)
+            * Affine2::from_translation(
+                uinode.content_box().min - text_scroll.map_or(Vec2::ZERO, |scroll| scroll.0),
+            );
+
+        let clip = if text_scroll.is_some() {
+            let content_box = uinode.content_box();
+            let text_clip = Rect::from_center_size(
+                global_transform.affine().translation + content_box.center(),
+                content_box.size(),
+            );
+            Some(maybe_clip.map_or(text_clip, |clip| clip.clip.intersect(text_clip)))
+        } else {
+            maybe_clip.map(|clip| clip.clip)
+        };
 
         // sadge
         let transform = Affine3A::from_mat3_translation(
@@ -395,7 +416,7 @@ pub fn extract_glyphs(
             Glyph(PositionedGlyph {
                 position,
                 atlas_info,
-                span_index,
+                section_index,
                 ..
             }),
             span_entity,
@@ -406,11 +427,7 @@ pub fn extract_glyphs(
         )) = iter.next()
         {
             if inherited_visibility.get() {
-                let rect = texture_atlases
-                    .get(atlas_info.texture_atlas)
-                    .unwrap()
-                    .textures[atlas_info.location.glyph_index]
-                    .as_rect();
+                let rect = atlas_info.rect;
                 extracted_glyphs.push(ExtractedGlyph {
                     vertices: glyph_vertices.0.map(|v| {
                         let glyph_transform = v.compute_transform();
@@ -436,7 +453,7 @@ pub fn extract_glyphs(
 
             if !extracted.is_empty()
                 && iter.peek().is_none_or(|(glyph, _, _, _, _, _)| {
-                    glyph.0.span_index != *span_index
+                    glyph.0.section_index != *section_index
                         || glyph.0.atlas_info.texture != atlas_info.texture
                 })
             {
@@ -447,10 +464,10 @@ pub fn extract_glyphs(
 
                 extracted_spans.push(ExtractedGlyphSpan {
                     kind: ExtractedGlyphSpanKind::Ui {
-                        clip: clip.map(|clip| clip.clip),
+                        clip,
                         extracted_camera_entity,
                     },
-                    sork_key: uinode.stack_index as f32 + bevy::ui_render::stack_z_offsets::TEXT,
+                    sork_key: stack_index.0 as f32 + bevy::ui_render::stack_z_offsets::TEXT,
                     main_entity: entity.into(),
                     span_entity: span_entity.0.into(),
                     render_entity: commands.spawn(TemporaryRenderEntity).id(),
@@ -683,12 +700,12 @@ fn queue_glyphs<M: GlyphMaterial>(
                     &pipeline_cache,
                     &material_pipeline,
                     UiPipelineKey {
-                        hdr: view.hdr,
+                        target_format: view.target_format,
                         anti_alias: matches!(ui_anti_alias, None | Some(UiAntiAlias::On)),
                     },
                 );
 
-                transparent_phase.add(TransparentUi {
+                transparent_phase.add_transient(TransparentUi {
                     sort_key: FloatOrd(extracted_span.sork_key),
                     entity: (extracted_span.render_entity, extracted_span.main_entity),
                     pipeline,

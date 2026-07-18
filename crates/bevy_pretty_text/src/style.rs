@@ -146,7 +146,7 @@ impl Plugin for StylePlugin {
 ///     PrettyStyle("my_style"),
 ///     TextColor(Color::WHITE),
 ///     TextFont {
-///         font_size: 32.0,
+///         font_size: 32.0.into(),
 ///         ..Default::default()
 ///     },
 /// ));
@@ -183,7 +183,7 @@ impl Plugin for StylePlugin {
 /// ));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Component, Reflect)]
-#[component(immutable, on_add = register, on_remove = unregister, on_replace = replace)]
+#[component(immutable, on_add = register, on_remove = unregister, on_discard = replace)]
 pub struct PrettyStyle(pub &'static str);
 
 impl AsRef<str> for PrettyStyle {

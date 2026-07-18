@@ -33,7 +33,7 @@ First, add `bevy_pretty_text` to the dependencies in your `Cargo.toml`:
  
 ```toml
 [dependencies]
-bevy_pretty_text = "0.4"
+bevy_pretty_text = "0.5"
 ```
 
 Then, you'll need to add the `PrettyTextPlugin` to your app.
@@ -109,6 +109,7 @@ fn spawn_text(mut commands: Commands, mut materials: ResMut<Assets<Rainbow>>) {
 
 | `bevy` | `bevy_pretty_text` |
 | ------ | ------------------ |
+| 0.19   | 0.5                |
 | 0.18   | 0.4                |
 | 0.17   | 0.3                |
 | 0.16   | 0.1-0.2            |

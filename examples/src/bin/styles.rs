@@ -20,7 +20,7 @@ fn spawn_styles(mut commands: Commands) {
     commands.spawn((
         PrettyStyle("large_red"),
         TextFont {
-            font_size: 52.0,
+            font_size: 52.0.into(),
             ..Default::default()
         },
         TextColor(RED.into()),
@@ -61,7 +61,7 @@ fn apply_my_style(style: On<Add, MyStyle>, styles: Query<&PrettyStyle>, mut comm
     // I apply `my_style` by making the text grey and bigger
     commands.entity(style.event().entity).insert((
         TextFont {
-            font_size: 24.0,
+            font_size: 24.0.into(),
             ..Default::default()
         },
         TextColor(GREY.into()),

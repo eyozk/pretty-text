@@ -5,9 +5,9 @@
 use bevy::{
     camera::visibility::VisibilitySystems,
     ecs::system::SystemParam,
-    platform::collections::HashSet,
+    platform::collections::HashMap,
     prelude::*,
-    text::{ComputedTextBlock, PositionedGlyph, TextLayoutInfo},
+    text::{ComputedTextBlock, PositionedGlyph, TextLayoutInfo, TextSection},
     ui::UiSystems,
 };
 
@@ -39,7 +39,8 @@ impl Plugin for GlyphPlugin {
                 glyphify_text.in_set(GlyphSystems::Construct),
                 hide_builtin_text
                     .in_set(VisibilitySystems::CheckVisibility)
-                    .after(bevy::camera::visibility::check_visibility),
+                    .after(bevy::camera::visibility::check_visibility_cpu_culling)
+                    .after(bevy::camera::visibility::check_visibility_gpu_culling),
             ),
         )
         // this hack is disgusting and banished to `First`
@@ -142,6 +143,9 @@ pub struct SpanGlyphIndex(pub usize);
 #[derive(Debug, Clone, Component, Deref, Reflect)]
 #[require(Transform, GlyphVertices)]
 pub struct Glyph(pub PositionedGlyph);
+
+#[derive(Debug, Clone, Component)]
+struct GlyphText(String);
 
 /// Marker component for a whitespace [`Glyph`].
 #[derive(Debug, Clone, Copy, Component)]
@@ -583,31 +587,27 @@ impl From<&VertexMask> for VertexMask {
 /// Utility for reading the text data pointed to by a [`Glyph`] entity.
 #[derive(Debug, SystemParam)]
 pub struct GlyphReader<'w, 's> {
-    pub(crate) glyphs: Query<'w, 's, (&'static Glyph, &'static GlyphOf)>,
-    pub(crate) computed: Query<'w, 's, &'static ComputedTextBlock>,
+    glyphs: Query<'w, 's, &'static GlyphText>,
 }
 
 impl<'w, 's> GlyphReader<'w, 's> {
     /// Retrieve the text data pointed to by a `glyph`.
     pub fn read(&self, glyph: Entity) -> Result<&str> {
-        Ok(self.glyphs.get(glyph).map(|(glyph, glyph_of)| {
-            self.computed.get(glyph_of.0).map(|computed| {
-                let text = &computed.buffer().lines[glyph.0.line_index].text();
-                &text[glyph.0.byte_index..glyph.0.byte_index + glyph.0.byte_length]
-            })
-        })??)
+        Ok(self.glyphs.get(glyph)?.0.as_str())
     }
 }
 
 fn glyphify_text(
     mut commands: Commands,
-    text: Query<
+    text_blocks: Query<
         (Entity, &ComputedTextBlock, &TextLayoutInfo),
         (Changed<TextLayoutInfo>, With<PrettyText>),
     >,
-    fonts: Query<&TextFont>,
+    ui_text: Query<&Text>,
+    text_2d: Query<&Text2d>,
+    text_spans: Query<&TextSpan>,
 ) -> Result {
-    for (entity, computed, layout) in text.iter() {
+    for (entity, computed, layout) in text_blocks.iter() {
         commands
             .entity(entity)
             .despawn_related::<Glyphs>()
@@ -620,73 +620,97 @@ fn glyphify_text(
             continue;
         }
 
-        let mut rendered_hash = HashSet::with_capacity(layout.glyphs.len());
-        computed.buffer().layout_runs().for_each(|run| {
-            for glyph in run.glyphs.iter() {
-                rendered_hash.insert(glyph.start..glyph.end);
+        let mut source = String::new();
+        for text_entity in computed.entities() {
+            if let Ok(text) = ui_text.get(text_entity.entity) {
+                source.push_str(text.get_text());
+            } else if let Ok(text) = text_2d.get(text_entity.entity) {
+                source.push_str(text.get_text());
+            } else if let Ok(text) = text_spans.get(text_entity.entity) {
+                source.push_str(text.get_text());
+            } else {
+                return Err("text section is missing its text component".into());
             }
-        });
+        }
 
+        let mut glyph_data = Vec::with_capacity(layout.glyphs.len());
         let mut words = Words::default();
-        let mut i = 0;
-        for line in computed.buffer().lines.iter() {
-            let shape = line.shape_opt().unwrap();
-            for span in shape.spans.iter() {
-                for word in span.words.iter() {
-                    let rendered = word
-                        .glyphs
-                        .iter()
-                        .filter(|glyph| rendered_hash.contains(&(glyph.start..glyph.end)))
+        let mut word_start = None;
+        let layout_scale = computed.buffer().scale();
+
+        for line in computed.buffer().lines() {
+            for run in line.runs() {
+                let glyph_scale = run.font_size() / layout_scale / DEFAULT_FONT_SIZE;
+                for cluster in run.visual_clusters() {
+                    let range = cluster.text_range();
+                    let glyph_text = source
+                        .get(range.clone())
+                        .ok_or("glyph text range is outside the source text")?;
+                    let whitespace = glyph_text.chars().all(char::is_whitespace);
+                    let glyph_count = cluster
+                        .glyphs()
+                        .filter(|glyph| u16::try_from(glyph.id).is_ok())
                         .count();
-                    if !word.blank {
-                        words.0.push(i..i + rendered);
+
+                    if whitespace {
+                        if let Some(start) = word_start.take() {
+                            words.0.push(start..glyph_data.len());
+                        }
+                    } else if glyph_count > 0 && word_start.is_none() {
+                        word_start = Some(glyph_data.len());
                     }
-                    i += rendered;
+
+                    glyph_data.extend(std::iter::repeat_n(
+                        (range, whitespace, glyph_scale),
+                        glyph_count,
+                    ));
                 }
             }
         }
+
+        if let Some(start) = word_start {
+            words.0.push(start..glyph_data.len());
+        }
+
+        if glyph_data.len() != layout.glyphs.len() {
+            return Err("glyph metadata does not match the text layout".into());
+        }
+
         commands.entity(entity).insert(words);
 
         let text_entities = computed.entities();
-        let mut span_entity = Entity::PLACEHOLDER;
-        let mut si = 0;
-        let mut sl = 0;
-        for (i, glyph) in layout.glyphs.iter().enumerate() {
-            let se = text_entities[glyph.span_index].entity;
-            if se != span_entity {
-                span_entity = se;
-                si = 0;
-                sl = layout.glyphs[i..]
-                    .iter()
-                    .filter(|g| text_entities[g.span_index].entity == se)
-                    .count();
-            }
+        let mut span_counts = HashMap::<Entity, usize>::new();
+        for glyph in &layout.glyphs {
+            let span_entity = text_entities[glyph.section_index].entity;
+            *span_counts.entry(span_entity).or_default() += 1;
+        }
+        let mut span_indices = HashMap::<Entity, usize>::new();
 
-            let font = fonts
-                .get(span_entity)
-                .map_err(|_| "`Text`, `Text2d`, or `TextSpan` has not `TextFont` component")?;
+        for (i, (glyph, (text_range, whitespace, glyph_scale))) in
+            layout.glyphs.iter().zip(glyph_data).enumerate()
+        {
+            let span_entity = text_entities[glyph.section_index].entity;
+            let span_index = span_indices.entry(span_entity).or_default();
+            let glyph_text = source[text_range].to_owned();
 
-            let mut entity = commands.spawn((
+            let mut glyph_entity = commands.spawn((
                 Visibility::Inherited,
                 SpanGlyphOf(span_entity),
-                SpanGlyphCount(sl),
-                SpanGlyphIndex(si),
+                SpanGlyphCount(span_counts[&span_entity]),
+                SpanGlyphIndex(*span_index),
                 Glyph(glyph.clone()),
+                GlyphText(glyph_text),
                 GlyphOf(entity),
                 GlyphCount(layout.glyphs.len()),
                 GlyphIndex(i),
-                GlyphScale(font.font_size / DEFAULT_FONT_SIZE),
+                GlyphScale(glyph_scale),
             ));
 
-            let line = &computed.buffer().lines[glyph.line_index];
-            if line.text()[glyph.byte_index..glyph.byte_index + glyph.byte_length]
-                .chars()
-                .all(char::is_whitespace)
-            {
-                entity.insert(Whitespace);
+            if whitespace {
+                glyph_entity.insert(Whitespace);
             }
 
-            si += 1;
+            *span_index += 1;
         }
     }
 
@@ -765,7 +789,10 @@ mod test {
 
     #[test]
     fn assert_default_text_size() {
-        assert_eq!(TextFont::default().font_size, DEFAULT_FONT_SIZE);
+        assert_eq!(
+            TextFont::default().font_size,
+            FontSize::Px(DEFAULT_FONT_SIZE)
+        );
     }
 
     #[test]

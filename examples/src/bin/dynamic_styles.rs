@@ -3,7 +3,7 @@
 
 #![allow(unused)]
 
-use bevy::{color::palettes::css::RED, prelude::*, text::TextSpanAccess};
+use bevy::{color::palettes::css::RED, prelude::*, text::TextSection};
 use bevy_pretty_text::{
     prelude::*,
     style::{Style, Styles},
@@ -52,7 +52,7 @@ enum ApplyStyleToString {
     Caseless(&'static str),
 }
 
-fn style_text_dynamically<C: Component + TextSpanAccess>(
+fn style_text_dynamically<C: Component + TextSection>(
     add: On<Add, C>,
     mut text_styles: Query<(&C, &mut Styles)>,
     style_entities: Query<(&PrettyStyle, &ApplyStyleToString)>,
@@ -64,14 +64,14 @@ fn style_text_dynamically<C: Component + TextSpanAccess>(
     for (style, apply_to_string) in style_entities.iter() {
         match apply_to_string {
             ApplyStyleToString::Cased(str) => {
-                if text.read_span() == *str {
+                if text.get_text() == *str {
                     styles.0.push(Style::from_tag(style.0));
                 }
             }
             ApplyStyleToString::Caseless(str) => {
-                if str.len() == text.read_span().len()
+                if str.len() == text.get_text().len()
                     && text
-                        .read_span()
+                        .get_text()
                         .chars()
                         .map(|c| c.to_ascii_lowercase())
                         .eq(str.chars().map(|c| c.to_ascii_lowercase()))

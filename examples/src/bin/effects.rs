@@ -21,7 +21,7 @@ fn spawn_text(mut commands: Commands, server: Res<AssetServer>) {
         //                      ^^^^^^^ `rainbow` is a shader effect, so this span cannot
         //                              have another shader effect.
         TextFont {
-            font_size: 38.0,
+            font_size: 38.0.into(),
             ..Default::default()
         },
         Transform::from_xyz(0.0, 200.0, 0.0),
@@ -35,8 +35,8 @@ fn spawn_text(mut commands: Commands, server: Res<AssetServer>) {
             ヽ(`Д)ノ",
         ),
         TextFont {
-            font_size: 38.0,
-            font: server.load("Noto_Sans_JP/NotoSansJP-Regular.ttf"),
+            font_size: 38.0.into(),
+            font: server.load("Noto_Sans_JP/NotoSansJP-Regular.ttf").into(),
             ..Default::default()
         },
     ));
@@ -54,7 +54,7 @@ fn spawn_text(mut commands: Commands, server: Res<AssetServer>) {
         // },
         //
         TextFont {
-            font_size: 38.0,
+            font_size: 38.0.into(),
             ..Default::default()
         },
         Transform::from_xyz(0.0, -200.0, 0.0),
@@ -67,7 +67,7 @@ fn spawn_small_text(mut commands: Commands, server: Res<AssetServer>) {
     commands.spawn((
         pretty2d!("[To [Single](rainbow) or Not To [Single](rainbow)](wobble)"),
         TextFont {
-            font_size: 20.0,
+            font_size: 20.0.into(),
             ..Default::default()
         },
         Transform::from_xyz(0.0, 250.0, 0.0),
@@ -80,8 +80,8 @@ fn spawn_small_text(mut commands: Commands, server: Res<AssetServer>) {
             ヽ(`Д)ノ",
         ),
         TextFont {
-            font_size: 20.0,
-            font: server.load("Noto_Sans_JP/NotoSansJP-Regular.ttf"),
+            font_size: 20.0.into(),
+            font: server.load("Noto_Sans_JP/NotoSansJP-Regular.ttf").into(),
             ..Default::default()
         },
         Transform::from_xyz(0., 50., 0.),
@@ -90,7 +90,7 @@ fn spawn_small_text(mut commands: Commands, server: Res<AssetServer>) {
     commands.spawn((
         pretty2d!("[I cant believe its not [bsn](red)](shake(1, 1))"),
         TextFont {
-            font_size: 38.0,
+            font_size: 38.0.into(),
             ..Default::default()
         },
         Transform::from_xyz(0.0, -150.0, 0.0).with_scale(Vec3::splat(20.0 / 38.0)),
