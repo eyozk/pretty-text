@@ -1,10 +1,13 @@
-#import bevy_sprite::{
-    mesh2d_functions as mesh_functions,
-    mesh2d_view_bindings::view,
+#import bevy_pretty_text::{
+    globals,
+    atlas_texture,
+    atlas_sampler,
+    VertexOutput,
+    GLYPH_FLAG_OUTLINE,
+    glyph_sample,
+    glyph_coverage_at,
+    composite_glyph,
 }
-
-#import bevy_render::globals::Globals
-@group(0) @binding(1) var<uniform> globals: Globals;
 
 fn random(seed: vec2<f32>) -> f32 {
     return fract(sin(dot(seed, vec2<f32>(12.9898, 78.233))) * 43758.5453);
@@ -21,42 +24,39 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
-};
-
-@group(1) @binding(0) var texture: texture_2d<f32>;
-@group(1) @binding(1) var texture_sampler: sampler;
-
 struct Uniform {
-	intensity: f32,
-	frequency: f32,
-	speed: f32,
-	threshold: f32,
+    intensity: f32,
+    frequency: f32,
+    speed: f32,
+    threshold: f32,
 }
 
 @group(2) @binding(0) var<uniform> args: Uniform;
 
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let time = globals.time;
     var uv = in.uv;
-     
     let scanline = floor(uv.y * args.frequency);
-    let noise_input = vec2(scanline * 0.1, time * args.speed);
-    let glitch_noise = noise(noise_input);
-    let secondary_noise = noise(vec2(scanline * 0.03, time * args.speed * 0.7));
-    
+    let glitch_noise = noise(vec2(scanline * 0.1, globals.time * args.speed));
+    let secondary_noise = noise(vec2(
+        scanline * 0.03,
+        globals.time * args.speed * 0.7,
+    ));
+
     if (glitch_noise > args.threshold) {
         let displacement = (glitch_noise - args.threshold) / (1.0 - args.threshold);
-        let displacement_amount = displacement * args.intensity;
-        let final_displacement = displacement_amount * (secondary_noise - 0.5) * 2.0;
-        
-        uv.x += final_displacement;
+        uv.x += displacement * args.intensity * (secondary_noise - 0.5) * 2.0;
         uv.x = fract(uv.x);
     }
-    
-    return textureSample(texture, texture_sampler, uv) * in.color;
+
+    let source = textureSample(atlas_texture, atlas_sampler, uv);
+    if ((in.flags & GLYPH_FLAG_OUTLINE) == 0u) {
+        return source * in.color;
+    }
+    let safe_source = glyph_sample(uv, in);
+    return composite_glyph(
+        safe_source.rgb * in.color.rgb,
+        glyph_coverage_at(uv, in),
+        in,
+    );
 }

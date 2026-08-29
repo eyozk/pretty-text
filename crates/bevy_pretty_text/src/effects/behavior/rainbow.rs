@@ -36,6 +36,8 @@ pub struct Rainbow {
 }
 
 impl GlyphMaterial for Rainbow {
+    const SUPPORTS_TEXT_OUTLINE: bool = true;
+
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(RAINBOW_SHADER_HANDLE)
     }

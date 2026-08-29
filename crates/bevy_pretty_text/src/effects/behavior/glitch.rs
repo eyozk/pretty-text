@@ -39,6 +39,8 @@ pub struct Glitch {
 }
 
 impl GlyphMaterial for Glitch {
+    const SUPPORTS_TEXT_OUTLINE: bool = true;
+
     fn fragment_shader() -> ShaderRef {
         ShaderRef::Handle(GLITCH_SHADER_HANDLE)
     }

@@ -81,6 +81,12 @@ pub struct PrettyTextMaterial<M: GlyphMaterial>(pub Handle<M>);
 /// See [the module documentation](crate::effects::material) for general information
 /// about glyph materials and how to implement your own.
 pub trait GlyphMaterial: AsBindGroup + Asset + Clone + Sized {
+    /// Whether this material understands Pretty Text's expanded outline geometry.
+    ///
+    /// Materials that opt in should use the shared glyph sampling, coverage, and
+    /// compositing helpers from `bevy_pretty_text.wgsl`.
+    const SUPPORTS_TEXT_OUTLINE: bool = false;
+
     /// Returns this material's vertex shader. If [`ShaderRef::Default`] is returned,
     /// the default glyph vertex shader will be used.
     fn vertex_shader() -> ShaderRef {

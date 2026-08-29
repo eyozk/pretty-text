@@ -29,13 +29,16 @@ use bevy::transform::prelude::GlobalTransform;
 use bevy::{ecs::system::*, render::texture::GpuImage};
 
 use crate::effects::material::{DEFAULT_GLYPH_SHADER_HANDLE, GlyphMaterial};
+use crate::effects::outline::{expanded_glyph_rect, physical_outline_width};
+use crate::effects::{EffectQuery, TextOutline};
 use crate::glyph::{Glyph, GlyphIndex, GlyphScale, GlyphVertices, Glyphs, SpanGlyphOf};
 use crate::render::{GlyphInstance, GlyphVertex};
 use crate::*;
 
 use super::{
     DrawGlyph, ExtractedGlyph, ExtractedGlyphSpan, ExtractedGlyphSpanKind, ExtractedGlyphSpans,
-    ExtractedGlyphs, GlyphBatch, GlyphMaterialMeta, ImageBindGroups, SetTextureBindGroup,
+    ExtractedGlyphs, ExtractedTextOutline, GLYPH_FLAG_OUTLINE, GlyphBatch, GlyphMaterialMeta,
+    ImageBindGroups, SetTextureBindGroup,
 };
 
 const QUAD_VERTEX_POSITIONS: [Vec2; 4] = [
@@ -158,6 +161,9 @@ where
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let mut shader_defs = Vec::new();
+        if M::SUPPORTS_TEXT_OUTLINE {
+            shader_defs.push("TEXT_OUTLINE".into());
+        }
         if key.contains(SpritePipelineKey::TONEMAP_IN_SHADER) {
             shader_defs.push("TONEMAP_IN_SHADER".into());
             shader_defs.push(ShaderDefVal::UInt(
@@ -423,6 +429,7 @@ pub fn extract_glyphs(
         )>,
     >,
     text_styles: Extract<Query<&TextColor>>,
+    outlines: Extract<EffectQuery<&TextOutline>>,
 ) {
     let mut index = extracted_glyphs.len();
     let mut extracted = Vec::new();
@@ -501,6 +508,17 @@ pub fn extract_glyphs(
                     .get(span_entity.0)
                     .map(|text_color| LinearRgba::from(text_color.0))
                     .unwrap_or_default();
+                let outline = outlines
+                    .get(span_entity.0)
+                    .ok()
+                    .filter(|outline| outline.width > 0.0 && !outline.color.is_fully_transparent())
+                    .and_then(|outline| {
+                        let width = physical_outline_width(outline.width, layout_info.scale_factor);
+                        (width > 0.0).then(|| ExtractedTextOutline {
+                            color: LinearRgba::from(outline.color).to_f32_array(),
+                            width,
+                        })
+                    });
 
                 extracted_spans.push(ExtractedGlyphSpan {
                     kind: ExtractedGlyphSpanKind::Sprite,
@@ -509,6 +527,7 @@ pub fn extract_glyphs(
                     span_entity: span_entity.0.into(),
                     render_entity: commands.spawn(TemporaryRenderEntity).id(),
                     color: color.to_f32_array(),
+                    outline,
                     image: atlas_info.texture,
                     extracted: std::mem::take(&mut extracted),
                     material_extracted: false,
@@ -574,8 +593,11 @@ fn prepare_glyphs<T: GlyphMaterial>(
 
                 let batch_start = index;
                 for &glyph in span.extracted.iter().map(|i| &extracted_glyphs[*i]) {
-                    let glyph_rect = glyph.rect;
-                    let rect_size = glyph_rect.size().extend(1.0);
+                    let outline = T::SUPPORTS_TEXT_OUTLINE.then_some(span.outline).flatten();
+                    let render_rect = outline.map_or(glyph.rect, |outline| {
+                        expanded_glyph_rect(glyph.rect, outline.width.ceil() + 1.0)
+                    });
+                    let rect_size = render_rect.size().extend(1.0);
 
                     let mut i = 0;
                     let positions = QUAD_VERTEX_POSITIONS.map(|pos| {
@@ -585,12 +607,14 @@ fn prepare_glyphs<T: GlyphMaterial>(
                     });
 
                     let uvs = [
-                        Vec2::new(glyph.rect.min.x, glyph.rect.max.y),
-                        Vec2::new(glyph.rect.max.x, glyph.rect.max.y),
-                        Vec2::new(glyph.rect.max.x, glyph.rect.min.y),
-                        Vec2::new(glyph.rect.min.x, glyph.rect.min.y),
+                        Vec2::new(render_rect.min.x, render_rect.max.y),
+                        Vec2::new(render_rect.max.x, render_rect.max.y),
+                        Vec2::new(render_rect.max.x, render_rect.min.y),
+                        Vec2::new(render_rect.min.x, render_rect.min.y),
                     ]
                     .map(|pos| pos / atlas_extent);
+                    let source_uv_min = glyph.rect.min / atlas_extent;
+                    let source_uv_max = glyph.rect.max / atlas_extent;
 
                     let colors = glyph.colors;
 
@@ -604,8 +628,13 @@ fn prepare_glyphs<T: GlyphMaterial>(
 
                     glyph_meta.instances.push(GlyphInstance {
                         span_color,
+                        outline_color: outline.map_or([0.0; 4], |outline| outline.color),
+                        source_uv_min: source_uv_min.into(),
+                        source_uv_max: source_uv_max.into(),
+                        outline_width: outline.map_or(0.0, |outline| outline.width),
                         scale: glyph.glyph_scale,
                         index: glyph.index,
+                        flags: outline.map_or(0, |_| GLYPH_FLAG_OUTLINE),
                     });
 
                     index += 1;

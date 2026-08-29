@@ -134,7 +134,7 @@ pub mod prelude {
     pub use super::effects::material::{
         GlyphMaterial, PrettyTextMaterial, PrettyTextMaterialAppExt,
     };
-    pub use super::effects::{EffectOf, EffectQuery, Effects};
+    pub use super::effects::{EffectOf, EffectQuery, Effects, TextOutline};
     pub use crate::effects;
 }
 

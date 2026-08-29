@@ -99,6 +99,9 @@ pub mod appearance;
 pub mod behavior;
 pub mod dynamic;
 pub mod material;
+pub(crate) mod outline;
+
+pub use outline::TextOutline;
 
 /// A [`SystemSet`] for all effect systems.
 ///
@@ -113,7 +116,8 @@ pub struct EffectsPlugin;
 impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((behavior::plugin, appearance::plugin, material::plugin))
-            .init_resource::<dynamic::DynEffectRegistry>();
+            .init_resource::<dynamic::DynEffectRegistry>()
+            .register_type::<TextOutline>();
 
         app.configure_sets(
             PostUpdate,

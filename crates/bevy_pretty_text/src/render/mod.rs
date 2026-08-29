@@ -112,6 +112,8 @@ struct SpanMaterialSystems;
 struct DefaultGlyphMaterial {}
 
 impl GlyphMaterial for DefaultGlyphMaterial {
+    const SUPPORTS_TEXT_OUTLINE: bool = true;
+
     fn vertex_shader() -> ShaderRef {
         ShaderRef::Handle(DEFAULT_GLYPH_SHADER_HANDLE)
     }
@@ -253,10 +255,18 @@ struct GlyphVertex {
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct GlyphInstance {
+    // Keep the original fields first so non-outline custom shaders retain their locations.
     span_color: [f32; 4],
     scale: f32,
     index: u32,
+    outline_color: [f32; 4],
+    source_uv_min: [f32; 2],
+    source_uv_max: [f32; 2],
+    outline_width: f32,
+    flags: u32,
 }
+
+const GLYPH_FLAG_OUTLINE: u32 = 1 << 0;
 
 fn vertex_buffer_layouts() -> [VertexBufferLayout; 2] {
     let vertex_layout = VertexBufferLayout::from_vertex_formats(
@@ -271,6 +281,11 @@ fn vertex_buffer_layouts() -> [VertexBufferLayout; 2] {
         VertexStepMode::Instance,
         [
             VertexFormat::Float32x4,
+            VertexFormat::Float32,
+            VertexFormat::Uint32,
+            VertexFormat::Float32x4,
+            VertexFormat::Float32x2,
+            VertexFormat::Float32x2,
             VertexFormat::Float32,
             VertexFormat::Uint32,
         ],
@@ -336,10 +351,17 @@ struct ExtractedGlyphSpan {
     span_entity: MainEntity,
     render_entity: Entity,
     color: [f32; 4],
+    outline: Option<ExtractedTextOutline>,
     image: AssetId<Image>,
     extracted: Vec<usize>,
     // Marks whether or not this span has been prepared by a glyph material.
     material_extracted: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ExtractedTextOutline {
+    color: [f32; 4],
+    width: f32,
 }
 
 enum ExtractedGlyphSpanKind {

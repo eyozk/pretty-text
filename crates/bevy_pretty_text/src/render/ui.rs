@@ -19,13 +19,15 @@ use bevy::render::{
 };
 use bevy::render::{RenderApp, RenderStartup, RenderSystems};
 use bevy::shader::ShaderRef;
-use bevy::text::{ComputedTextBlock, PositionedGlyph};
+use bevy::text::{ComputedTextBlock, PositionedGlyph, TextLayoutInfo};
 use bevy::ui::ComputedStackIndex;
 use bevy::ui::widget::TextScroll;
 use bevy::ui_render::{TransparentUi, UiCameraMap, UiCameraView, UiPipelineKey};
 use bevy::{ecs::system::*, render::texture::GpuImage};
 
 use crate::effects::material::{DEFAULT_GLYPH_SHADER_HANDLE, GlyphMaterial};
+use crate::effects::outline::{expanded_glyph_rect, physical_outline_width};
+use crate::effects::{EffectQuery, TextOutline};
 use crate::glyph::{
     Glyph, GlyphIndex, GlyphScale, GlyphVertices, Glyphs, RetainedInheritedVisibility, SpanGlyphOf,
 };
@@ -34,7 +36,8 @@ use crate::*;
 
 use super::{
     DrawGlyph, ExtractedGlyph, ExtractedGlyphSpan, ExtractedGlyphSpanKind, ExtractedGlyphSpans,
-    ExtractedGlyphs, GlyphBatch, GlyphMaterialMeta, ImageBindGroups, SetTextureBindGroup,
+    ExtractedGlyphs, ExtractedTextOutline, GLYPH_FLAG_OUTLINE, GlyphBatch, GlyphMaterialMeta,
+    ImageBindGroups, SetTextureBindGroup,
 };
 
 const QUAD_VERTEX_POSITIONS: [Vec2; 4] = [
@@ -157,11 +160,14 @@ where
 
     fn specialize(&self, key: Self::Key) -> RenderPipelineDescriptor {
         let buffers = super::vertex_buffer_layouts().to_vec();
-        let shader_defs = if key.anti_alias {
+        let mut shader_defs = if key.anti_alias {
             vec!["ANTI_ALIAS".into()]
         } else {
             Vec::new()
         };
+        if M::SUPPORTS_TEXT_OUTLINE {
+            shader_defs.push("TEXT_OUTLINE".into());
+        }
 
         let mut descriptor = RenderPipelineDescriptor {
             vertex: VertexState {
@@ -343,6 +349,7 @@ pub fn extract_glyphs(
                 &ComputedUiTargetCamera,
                 &Glyphs,
                 &RetainedInheritedVisibility,
+                &TextLayoutInfo,
             ),
             With<ComputedTextBlock>,
         >,
@@ -358,6 +365,7 @@ pub fn extract_glyphs(
         )>,
     >,
     text_styles: Extract<Query<&TextColor>>,
+    outlines: Extract<EffectQuery<&TextOutline>>,
     camera_map: Extract<UiCameraMap>,
 ) {
     let mut index = extracted_glyphs.len();
@@ -374,6 +382,7 @@ pub fn extract_glyphs(
         camera,
         glyph_entities,
         inherited_visibility,
+        layout_info,
     ) in &uitext_query
     {
         if !inherited_visibility.0.get() || uinode.is_empty() {
@@ -461,6 +470,17 @@ pub fn extract_glyphs(
                     .get(span_entity.0)
                     .map(|text_color| LinearRgba::from(text_color.0))
                     .unwrap_or_default();
+                let outline = outlines
+                    .get(span_entity.0)
+                    .ok()
+                    .filter(|outline| outline.width > 0.0 && !outline.color.is_fully_transparent())
+                    .and_then(|outline| {
+                        let width = physical_outline_width(outline.width, layout_info.scale_factor);
+                        (width > 0.0).then(|| ExtractedTextOutline {
+                            color: LinearRgba::from(outline.color).to_f32_array(),
+                            width,
+                        })
+                    });
 
                 extracted_spans.push(ExtractedGlyphSpan {
                     kind: ExtractedGlyphSpanKind::Ui {
@@ -472,6 +492,7 @@ pub fn extract_glyphs(
                     span_entity: span_entity.0.into(),
                     render_entity: commands.spawn(TemporaryRenderEntity).id(),
                     color: color.to_f32_array(),
+                    outline,
                     image: atlas_info.texture,
                     extracted: std::mem::take(&mut extracted),
                     material_extracted: false,
@@ -535,8 +556,11 @@ fn prepare_glyphs<T: GlyphMaterial>(
 
             let batch_start = index;
             for &glyph in span.extracted.iter().map(|i| &extracted_glyphs[*i]) {
-                let glyph_rect = glyph.rect;
-                let rect_size = glyph_rect.size().extend(1.0);
+                let outline = T::SUPPORTS_TEXT_OUTLINE.then_some(span.outline).flatten();
+                let render_rect = outline.map_or(glyph.rect, |outline| {
+                    expanded_glyph_rect(glyph.rect, outline.width.ceil() + 1.0)
+                });
+                let rect_size = render_rect.size().extend(1.0);
 
                 // Specify the corners of the glyph
                 let mut i = 0;
@@ -581,23 +605,25 @@ fn prepare_glyphs<T: GlyphMaterial>(
 
                 let uvs = [
                     Vec2::new(
-                        glyph.rect.min.x + positions_diff[0].x,
-                        glyph.rect.min.y + positions_diff[0].y,
+                        render_rect.min.x + positions_diff[0].x,
+                        render_rect.min.y + positions_diff[0].y,
                     ),
                     Vec2::new(
-                        glyph.rect.max.x + positions_diff[1].x,
-                        glyph.rect.min.y + positions_diff[1].y,
+                        render_rect.max.x + positions_diff[1].x,
+                        render_rect.min.y + positions_diff[1].y,
                     ),
                     Vec2::new(
-                        glyph.rect.max.x + positions_diff[2].x,
-                        glyph.rect.max.y + positions_diff[2].y,
+                        render_rect.max.x + positions_diff[2].x,
+                        render_rect.max.y + positions_diff[2].y,
                     ),
                     Vec2::new(
-                        glyph.rect.min.x + positions_diff[3].x,
-                        glyph.rect.max.y + positions_diff[3].y,
+                        render_rect.min.x + positions_diff[3].x,
+                        render_rect.max.y + positions_diff[3].y,
                     ),
                 ]
                 .map(|pos| pos / atlas_extent);
+                let source_uv_min = glyph.rect.min / atlas_extent;
+                let source_uv_max = glyph.rect.max / atlas_extent;
 
                 let colors = glyph.colors;
 
@@ -611,8 +637,13 @@ fn prepare_glyphs<T: GlyphMaterial>(
 
                 glyph_meta.instances.push(GlyphInstance {
                     span_color,
+                    outline_color: outline.map_or([0.0; 4], |outline| outline.color),
+                    source_uv_min: source_uv_min.into(),
+                    source_uv_max: source_uv_max.into(),
+                    outline_width: outline.map_or(0.0, |outline| outline.width),
                     scale: glyph.glyph_scale,
                     index: glyph.index,
+                    flags: outline.map_or(0, |_| GLYPH_FLAG_OUTLINE),
                 });
 
                 index += 1;
